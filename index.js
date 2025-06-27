@@ -1,38 +1,61 @@
+/**
+ * @typedef {import("node:fs").PathLike} PathLike
+ * @typedef {import('http-proxy-middleware').Options} ProxyOptions
+ * @typedef {import('http-proxy-middleware').RequestHandler} RequestHandler
+ */
 import express from "express";
 import { Agent, createServer } from "node:http";
-import { hostname } from "node:os";
 import { createProxyMiddleware } from "http-proxy-middleware";
 import net from "node:net";
-import { resolve } from "node:path";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
+const socketPath = path.resolve(process.argv[2] || process.env.RELOPROXY_SOCK || "./reloproxy.sock"); 
+const config = JSON.parse(readFileSync(path.join(__dirname, "config.json")));
 
-const socketPath = resolve(process.argv[2] || process.env.RELOPROXY_SOCK || "./reloproxy.sock"); 
-const uvSockPath = resolve(process.argv[3] || process.env.UV_SOCK || "./uv.sock");
-
-function proxyToUnixSocket(path, socketPath) {
-  return app.use(path,createProxyMiddleware({
-    target: "http://localhost",
-    changeOrigin: true,
-    logLevel: "debug",
+/**
+ * @param {PathLike} path 
+ * @param {PathLike} socketPath 
+ * @param {ProxyOptions} [extras]
+ * @returns {RequestHandler}
+ */
+function unixSocketMiddleWare(path, socketPath, extras={changeOrigin: true,target: "http://localhost"}) {
+  return createProxyMiddleware({
+    ...extras,
+    pathFilter: p => path.join(path, p),
     agent: new (class extends Agent {
       createConnection(_, callback) {
         return net.createConnection(socketPath, callback);
       }
     })(),
-    onError(_, _, res) {
+    onError(_, __, res) {
       res.status(502).send("Bad Gateway");
     },
-  }));
+  });
 }
 
-app.use("/uv", (req, res, next) => {
-  console.log("Incoming request to /uv:", req.method, req.url);
-  next();
+config?.proxy_paths?.forEach(p => {
+  if (!p.socket || !p.paths) return;
+  if (!p.target) p.target = "http://localhost";
+
+  p.paths.forEach(proxypath => {
+    app.use(
+      proxypath,
+      unixSocketMiddleWare(proxypath, path.resolve(__dirname, p.socket), p)
+    );
+  });
 });
 
-proxyToUnixSocket("/", uvSockPath);
+Object.entries(config?.events || {}).forEach(([event, { init, on }]) => {
+  if (init) eval(init);
+  if (on) app.on(event, eval(on));
+});
+
 
 app.use(
   createProxyMiddleware({
@@ -44,7 +67,7 @@ app.use(
       }
     })(),
     logLevel: "debug",
-    onError(_, _, res) {
+    onError(_, __, res) {
       res.status(502).send("Bad Gateway");
     },
   })

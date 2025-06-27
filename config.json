@@ -1,0 +1,17 @@
+{
+  "proxy_paths": [
+    {
+      "socket": "uv.sock",
+      "paths": ["/uv/", "/epoxy/", "/baremux/"],
+      "target": "http://localhost",
+      "changeOrigin": true,
+      "logLevel": "warn"
+    }
+  ],
+  "events": {
+    "upgrade": {
+      "init": "globalThis.wispMiddleware=unixSocketMiddleWare(\"/\", path.resolve(__dirname, \"uv.sock\"))",
+      "on": "globalThis.wispMiddleware"
+    }
+  }
+}
